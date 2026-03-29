@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -186,9 +186,9 @@ if uploaded_file and run_btn:
         col1.metric("ML Service Level (%)", round(service_ml,2))
         col2.metric("Traditional Service Level (%)", round(service_trad,2))
 
-        fig, ax = plt.subplots()
-        ax.bar(["ML","Traditional"], [service_ml, service_trad])
-        st.pyplot(fig)
+        #fig, ax = plt.subplots()
+        #ax.bar(["ML","Traditional"], [service_ml, service_trad])
+        #st.pyplot(fig)
 
         # ============================================================
         # DOWNLOAD BUTTON

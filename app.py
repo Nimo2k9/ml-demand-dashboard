@@ -6,7 +6,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import random
-import tensorflow as tf
+#import tensorflow as tf
 
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
@@ -22,7 +22,7 @@ from statsmodels.tsa.arima.model import ARIMA
 SEED = 42
 np.random.seed(SEED)
 random.seed(SEED)
-tf.random.set_seed(SEED)
+#tf.random.set_seed(SEED)
 
 LT = 1.2
 Z = 1.65

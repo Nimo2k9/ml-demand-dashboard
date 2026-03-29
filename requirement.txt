@@ -4,6 +4,5 @@ numpy
 scikit-learn
 xgboost
 statsmodels
-matplotlib
+matplotlib==3.7.1
 openpyxl
-tensorflow

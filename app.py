@@ -1,12 +1,10 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-#import matplotlib.pyplot as plt
 import warnings
 warnings.filterwarnings("ignore")
 
 import random
-#import tensorflow as tf
 
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
@@ -16,13 +14,12 @@ from xgboost import XGBRegressor
 from statsmodels.tsa.arima.model import ARIMA
 
 # ============================================================
-# GLOBAL SETTINGS
+# SETTINGS
 # ============================================================
 
 SEED = 42
 np.random.seed(SEED)
 random.seed(SEED)
-#tf.random.set_seed(SEED)
 
 LT = 1.2
 Z = 1.65
@@ -35,7 +32,7 @@ uploaded_file = st.sidebar.file_uploader("Upload Excel File", type=["xlsx"])
 run_btn = st.sidebar.button("🚀 Run Analysis")
 
 # ============================================================
-# METRICS FUNCTION
+# METRICS
 # ============================================================
 
 def compute_metrics(y_true, y_pred):
@@ -48,13 +45,12 @@ def compute_metrics(y_true, y_pred):
 
     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
     mae = mean_absolute_error(y_true, y_pred)
-
     wmape = np.sum(np.abs(y_true - y_pred)) / np.sum(y_true) * 100 if np.sum(y_true)!=0 else np.nan
 
     return rmse, mae, wmape
 
 # ============================================================
-# MAIN APP
+# MAIN
 # ============================================================
 
 if uploaded_file and run_btn:
@@ -64,7 +60,7 @@ if uploaded_file and run_btn:
         df = pd.read_excel(uploaded_file)
         df = df[df["LCM"]=="Local"]
 
-        # TRANSFORM
+        # ---------------- TRANSFORM ----------------
         static_cols = ["Item Code","Item Name","Price"]
         month_cols = [c for c in df.columns if c not in static_cols and c!="LCM"]
 
@@ -81,7 +77,7 @@ if uploaded_file and run_btn:
 
         df_long = df_long.sort_values(["Item Code","Date"])
 
-        # SEGMENT
+        # ---------------- SEGMENT ----------------
         item_stats = df_long.groupby("Item Code").agg(mean_demand=("Demand","mean")).reset_index()
 
         def segment(row):
@@ -92,7 +88,7 @@ if uploaded_file and run_btn:
         item_stats["Segment"] = item_stats.apply(segment, axis=1)
         df_long = df_long.merge(item_stats[["Item Code","Segment"]], on="Item Code")
 
-        # FEATURES
+        # ---------------- FEATURES ----------------
         df_long["Lag1"] = df_long.groupby("Item Code")["Demand"].shift(1)
         df_long["Lag2"] = df_long.groupby("Item Code")["Demand"].shift(2)
         df_long["Lag3"] = df_long.groupby("Item Code")["Demand"].shift(3)
@@ -134,8 +130,7 @@ if uploaded_file and run_btn:
             detailed_results.append([seg,"RF",rmse,mae,wmape])
             scores["RF"]=rmse
 
-            xgb=XGBRegressor(n_estimators=400,learning_rate=0.05,max_depth=5,
-                             random_state=SEED)
+            xgb=XGBRegressor(n_estimators=400,learning_rate=0.05,max_depth=5,random_state=SEED)
             xgb.fit(train_seg[features],train_seg["Demand"])
             preds=xgb.predict(val_seg[features])
             rmse,mae,wmape=compute_metrics(val_seg["Demand"],preds)
@@ -158,53 +153,83 @@ if uploaded_file and run_btn:
         results_df=pd.DataFrame(detailed_results,columns=["Segment","Model","RMSE","MAE","WMAPE"])
 
         # ============================================================
-        # KPI DISPLAY
-        # ============================================================
-
-        col1,col2,col3=st.columns(3)
-        col1.metric("Total Items", df["Item Code"].nunique())
-        col2.metric("Segments", df_long["Segment"].nunique())
-        col3.metric("Models Tested", len(results_df["Model"].unique()))
-
-        # ============================================================
-        # MODEL TABLE
+        # UI - MODEL COMPARISON
         # ============================================================
 
         st.subheader("📊 Model Comparison")
         st.dataframe(results_df)
 
-        # ============================================================
-        # SERVICE LEVEL
-        # ============================================================
+        seg = st.selectbox("Select Segment", results_df["Segment"].unique())
+        temp = results_df[results_df["Segment"]==seg]
 
-        service_ml = np.random.uniform(92,97)
-        service_trad = np.random.uniform(85,92)
-
-        st.subheader("📦 Service Level Comparison")
-
-        col1,col2=st.columns(2)
-        col1.metric("ML Service Level (%)", round(service_ml,2))
-        col2.metric("Traditional Service Level (%)", round(service_trad,2))
-
-        #fig, ax = plt.subplots()
-        #ax.bar(["ML","Traditional"], [service_ml, service_trad])
-        #st.pyplot(fig)
+        st.bar_chart(temp.set_index("Model")["RMSE"])
+        st.success(f"Best Model: {best_models[seg]}")
 
         # ============================================================
-        # DOWNLOAD BUTTON
+        # 6-MONTH FORECAST
         # ============================================================
 
-        st.subheader("📥 Download Results")
+        st.subheader("🔮 Forecast Next 6 Months")
 
-        excel_file = "results.xlsx"
-        results_df.to_excel(excel_file,index=False)
+        item = st.selectbox("Select Item", df_long["Item Code"].unique())
 
-        with open(excel_file, "rb") as f:
-            st.download_button(
-                "Download Model Results",
-                f,
-                file_name="Model_Results.xlsx"
-            )
+        item_data = df_long[df_long["Item Code"]==item].sort_values("Date")
+        seg_item = item_data["Segment"].iloc[0]
+        model_name = best_models[seg_item]
+
+        st.info(f"Segment: {seg_item}")
+        st.success(f"Best Model: {model_name}")
+
+        train_item = train_full[train_full["Item Code"]==item]
+
+        forecast_values = []
+
+        if model_name == "ARIMA":
+
+            ts = train_item.set_index("Date")["Demand"].asfreq("MS")
+            model = ARIMA(ts, order=(1,1,1))
+            fit = model.fit()
+            forecast_values = fit.forecast(steps=6).values.tolist()
+
+        else:
+
+            if model_name == "RF":
+                model = RandomForestRegressor(n_estimators=300, random_state=SEED)
+                model.fit(train_item[features], train_item["Demand"])
+
+            elif model_name == "XGB":
+                model = XGBRegressor(n_estimators=400, random_state=SEED)
+                model.fit(train_item[features], train_item["Demand"])
+
+            else:
+                scaler = StandardScaler()
+                X_scaled = scaler.fit_transform(train_item[features])
+                model = SVR()
+                model.fit(X_scaled, train_item["Demand"])
+
+            last_row = train_item.iloc[-1:].copy()
+
+            for i in range(6):
+
+                if model_name == "SVR":
+                    pred = model.predict(scaler.transform(last_row[features]))[0]
+                else:
+                    pred = model.predict(last_row[features])[0]
+
+                forecast_values.append(pred)
+
+                last_row["Lag3"] = last_row["Lag2"]
+                last_row["Lag2"] = last_row["Lag1"]
+                last_row["Lag1"] = pred
+                last_row["RollingMean3"] = (last_row["Lag1"]+last_row["Lag2"]+last_row["Lag3"])/3
+
+        forecast_df = pd.DataFrame({
+            "Month": [f"M{i+1}" for i in range(6)],
+            "Forecast": forecast_values
+        })
+
+        st.dataframe(forecast_df)
+        st.line_chart(forecast_df.set_index("Month"))
 
 else:
-    st.info("👈 Upload file and click 'Run Analysis'")
+    st.info("👈 Upload file and click Run Analysis")

@@ -8,17 +8,20 @@ from sklearn.svm import SVR
 from xgboost import XGBRegressor
 from statsmodels.tsa.arima.model import ARIMA
 
-# ==============================
-# LOAD DATA
-# ==============================
 @st.cache_data
-def load_data():
-    df = pd.read_excel("MRO consumption data.xlsx")
+def load_data(uploaded_file):
+    df = pd.read_excel(uploaded_file)
     df = df[df["LCM"] == "Local"]
     return df
 
-df = load_data()
 
+uploaded_file = st.file_uploader("📂 Upload Excel File", type=["xlsx"])
+
+if uploaded_file is not None:
+    df = load_data(uploaded_file)
+else:
+    st.warning("Please upload your dataset to continue.")
+    st.stop()
 # ==============================
 # PREPROCESS
 # ==============================

@@ -78,7 +78,7 @@ use_sample = st.sidebar.checkbox("Use Sample Data (Default)", value=True)
 uploaded_file = st.sidebar.file_uploader("Upload Your Excel File", type=["xlsx"])
 
 # 🔗 Replace this with your GitHub raw file link
-SAMPLE_URL = "https://github.com/Nimo2k9/ml-demand-dashboard/blob/main/MRO%20consumption%20data.xlsx"
+SAMPLE_URL = "https://github.com/Nimo2k9/ml-demand-dashboard/blob/18d85ffbd86eb74a6da17b6d20359c61a7b79151/MRO%20consumption%20data.xlsx"
 
 @st.cache_data
 def load_data(source):

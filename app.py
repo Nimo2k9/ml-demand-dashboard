@@ -1,21 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import hashlib
-
-# ==============================
-# LOGIN SYSTEM (OPTIONAL)
-# ==============================
-USER_CREDENTIALS = {"admin": "1234", "niaz": "ml2025"}
-
-def hash_password(password):
-    import hashlib
-    return hashlib.sha256(password.encode()).hexdigest()
-
-USER_CREDENTIALS = {u: hash_password(p) for u, p in USER_CREDENTIALS.items()}
-
-if "logged_in" not in st.session_state:
-    st.session_state["logged_in"] = True   # 🔥 set True for public app
 
 # ==============================
 # IMPORTS
@@ -41,15 +26,19 @@ st.set_page_config(page_title="AI Demand Forecast Dashboard", layout="wide")
 st.title("🚀 AI Demand Forecast Dashboard")
 
 # ==============================
+# SIDEBAR SETTINGS
+# ==============================
+st.sidebar.header("⚙️ Inventory Settings")
+
+LT = st.sidebar.number_input("Lead Time (months)", value=1.2)
+Z = st.sidebar.number_input("Service Level (Z value)", value=1.65)
+
+# ==============================
 # DATA SOURCE
 # ==============================
 st.sidebar.header("📂 Data Source")
 
-data_option = st.sidebar.radio(
-    "Choose Data Source",
-    ["Sample Data", "Upload File"]
-)
-
+data_option = st.sidebar.radio("Choose Data Source", ["Sample Data", "Upload File"])
 uploaded_file = st.sidebar.file_uploader("Upload Excel", type=["xlsx"])
 
 SAMPLE_URL = "https://raw.githubusercontent.com/Nimo2k9/ml-demand-dashboard/main/MRO%20consumption%20data.xlsx"
@@ -67,18 +56,19 @@ def load_data(source, is_url=False):
 
 if data_option == "Sample Data":
     df = load_data(SAMPLE_URL, True)
-    st.success("Using sample dataset")
 else:
     if uploaded_file:
         df = load_data(uploaded_file)
-        st.success("Using uploaded dataset")
     else:
         st.stop()
 
 if df is None:
     st.stop()
 
-with st.expander("Preview Data"):
+# ==============================
+# PREVIEW
+# ==============================
+with st.expander("🔍 Preview Data"):
     st.dataframe(df.head())
 
 # ==============================
@@ -101,7 +91,7 @@ df["Price"] = pd.to_numeric(df["Price"], errors="coerce")
 df = df.dropna().sort_values(["Item Code","Date"])
 
 # ==============================
-# FEATURES (FIXED)
+# FEATURES
 # ==============================
 df["Lag1"] = df.groupby("Item Code")["Demand"].shift(1)
 df["Lag2"] = df.groupby("Item Code")["Demand"].shift(2)
@@ -118,9 +108,15 @@ features = ["Lag1","Lag2","Lag3","RollingMean3","Price","Month","Year","Trend"]
 df = df.dropna()
 
 # ==============================
-# ITEM SELECT
+# ITEM SELECTION
 # ==============================
+item_map = df[["Item Code","Item Name"]].drop_duplicates()
+
 item = st.selectbox("Select Item", df["Item Code"].unique())
+
+item_name = item_map[item_map["Item Code"] == item]["Item Name"].values[0]
+st.markdown(f"### 🧾 Item Description: **{item_name}**")
+
 item_df = df[df["Item Code"] == item].copy()
 
 if len(item_df) < 12:
@@ -147,11 +143,10 @@ def train_model(name, model):
     try:
         model.fit(X_train, y_train)
         pred = model.predict(X_val)
-        rmse = np.sqrt(mean_squared_error(y_val, pred))
+        rmse_scores[name] = np.sqrt(mean_squared_error(y_val, pred))
         models[name] = model
-        rmse_scores[name] = rmse
-    except Exception as e:
-        st.warning(f"{name} failed")
+    except:
+        pass
 
 train_model("RF", RandomForestRegressor())
 train_model("XGB", XGBRegressor())
@@ -166,8 +161,7 @@ X_val_s = scaler.transform(X_val)
 
 svr = SVR()
 svr.fit(X_train_s, y_train)
-pred = svr.predict(X_val_s)
-rmse_scores["SVR"] = np.sqrt(mean_squared_error(y_val, pred))
+rmse_scores["SVR"] = np.sqrt(mean_squared_error(y_val, svr.predict(X_val_s)))
 models["SVR"] = (svr, scaler)
 
 # ARIMA
@@ -220,10 +214,17 @@ for i in range(6):
 forecast_df = pd.DataFrame({"Date": future_dates, "Forecast": forecast})
 
 # ==============================
-# KPI
+# KPI (RESTORED)
 # ==============================
 rmse = rmse_scores[best_model]
-st.metric("RMSE", round(rmse,2))
+safety_stock = Z * rmse * np.sqrt(LT)
+avg_fc = forecast_df["Forecast"].mean()
+rop = avg_fc * LT + safety_stock
+
+col1, col2, col3 = st.columns(3)
+col1.metric("RMSE", round(rmse,2))
+col2.metric("Safety Stock", round(safety_stock,2))
+col3.metric("ROP", round(rop,2))
 
 # ==============================
 # PLOT
@@ -234,15 +235,23 @@ fig.add_trace(go.Scatter(x=forecast_df["Date"], y=forecast_df["Forecast"], name=
 st.plotly_chart(fig, use_container_width=True)
 
 # ==============================
-# RMSE CHART 🔥
+# RMSE CHART (WITH LABELS 🔥)
 # ==============================
 rmse_df = pd.DataFrame(list(rmse_scores.items()), columns=["Model","RMSE"]).sort_values("RMSE")
 
-fig2 = px.bar(rmse_df, x="Model", y="RMSE", title="Model Comparison")
+fig2 = px.bar(
+    rmse_df,
+    x="Model",
+    y="RMSE",
+    text="RMSE",
+    title="Model Comparison"
+)
+
+fig2.update_traces(textposition="outside")
 st.plotly_chart(fig2, use_container_width=True)
 
 # ==============================
-# FEATURE IMPORTANCE 🔥
+# FEATURE IMPORTANCE
 # ==============================
 if best_model in ["RF","XGB","GB","ET"]:
     imp = models[best_model].feature_importances_

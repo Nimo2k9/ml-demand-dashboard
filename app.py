@@ -18,7 +18,6 @@ USER_CREDENTIALS = {u: hash_password(p) for u, p in USER_CREDENTIALS.items()}
 
 def login():
     st.title("🔐 Login Required")
-
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
 
@@ -73,11 +72,10 @@ with col2:
 # ==============================
 st.sidebar.header("📂 Data Source")
 
-use_sample = st.sidebar.checkbox("Use Sample Data (Default)", value=True)
+use_sample = st.sidebar.checkbox("Use Sample Data", value=True)
 uploaded_file = st.sidebar.file_uploader("Upload Excel File", type=["xlsx"])
 
-# 🔴 REPLACE THIS WITH YOUR REAL LINK
-SAMPLE_URL = "https://raw.githubusercontent.com/Nimo2k9/ml-demand-dashboard/refs/heads/main/MRO%20consumption%20data.xlsx"
+SAMPLE_URL = "https://raw.githubusercontent.com/Nimo2k9/ml-demand-dashboard/main/MRO%20consumption%20data.xlsx"
 
 @st.cache_data
 def load_data(source):
@@ -87,20 +85,15 @@ def load_data(source):
             df = df[df["LCM"] == "Local"]
         return df
     except Exception as e:
-        st.error(f"❌ Error loading data: {e}")
+        st.error(f"Error loading data: {e}")
         return None
 
-# Data selection
 if uploaded_file is not None:
     df = load_data(uploaded_file)
-    st.success("✅ Using uploaded dataset")
-
+    st.success("Using uploaded data")
 elif use_sample:
     df = load_data(SAMPLE_URL)
-    st.info("📊 Using sample dataset from GitHub")
-
 else:
-    st.warning("Please upload a file or enable sample data")
     st.stop()
 
 if df is None:
@@ -121,16 +114,13 @@ df_long = df.melt(
 )
 
 df_long["Date"] = pd.to_datetime(df_long["Date"], errors="coerce")
-df_long = df_long.dropna(subset=["Date"])
-
 df_long["Demand"] = pd.to_numeric(df_long["Demand"], errors="coerce")
 df_long["Price"] = pd.to_numeric(df_long["Price"], errors="coerce")
 
-df_long = df_long.dropna()
-df_long = df_long.sort_values(["Item Code","Date"])
+df_long = df_long.dropna().sort_values(["Item Code","Date"])
 
 # ==============================
-# FEATURES
+# FEATURE ENGINEERING (FIXED)
 # ==============================
 df_long["Lag1"] = df_long.groupby("Item Code")["Demand"].shift(1)
 df_long["Lag2"] = df_long.groupby("Item Code")["Demand"].shift(2)
@@ -143,10 +133,12 @@ df_long["RollingMean3"] = (
     .mean()
 )
 
-features = ["Lag1","Lag2","Lag3","RollingMean3","Price"]
+# 🔥 NEW FEATURES
+df_long["Month"] = df_long["Date"].dt.month
+df_long["Year"] = df_long["Date"].dt.year
+df_long["Trend"] = df_long.groupby("Item Code").cumcount()
 
-for col in features:
-    df_long[col] = pd.to_numeric(df_long[col], errors='coerce')
+features = ["Lag1","Lag2","Lag3","RollingMean3","Price","Month","Year","Trend"]
 
 df_long = df_long.dropna()
 
@@ -154,14 +146,13 @@ df_long = df_long.dropna()
 # ITEM SELECTION
 # ==============================
 item_list = df_long["Item Code"].unique()
-item_map = df_long[["Item Code","Item Name"]].drop_duplicates()
-
 selected_item = st.selectbox("Select Item Code", item_list)
 
-item_name = item_map[item_map["Item Code"] == selected_item]["Item Name"].values[0]
-st.markdown(f"**Item Description:** {item_name}")
+item_df = df_long[df_long["Item Code"] == selected_item].copy()
 
-item_df = df_long[df_long["Item Code"] == selected_item]
+if len(item_df) < 12:
+    st.warning("⚠️ Not enough data for reliable forecasting")
+    st.stop()
 
 # ==============================
 # TRAIN / VALID
@@ -171,10 +162,10 @@ split = int(len(item_df)*0.8)
 train = item_df.iloc[:split]
 val = item_df.iloc[split:]
 
-X_train = train[features].astype(float)
+X_train = train[features]
 y_train = train["Demand"]
 
-X_val = val[features].astype(float)
+X_val = val[features]
 y_val = val["Demand"]
 
 models = {}
@@ -184,12 +175,13 @@ def train_model(name, model):
     try:
         model.fit(X_train, y_train)
         pred = model.predict(X_val)
-        rmse_scores[name] = np.sqrt(mean_squared_error(y_val, pred))
+        rmse = np.sqrt(mean_squared_error(y_val, pred))
+        rmse_scores[name] = rmse
         models[name] = model
-    except:
-        pass
+    except Exception as e:
+        st.warning(f"{name} failed: {e}")
 
-# ML Models
+# Train models
 train_model("RF", RandomForestRegressor())
 train_model("XGB", XGBRegressor())
 train_model("GB", GradientBoostingRegressor())
@@ -208,27 +200,28 @@ try:
     pred = svr.predict(X_val_s)
     rmse_scores["SVR"] = np.sqrt(mean_squared_error(y_val, pred))
     models["SVR"] = (svr, scaler)
-except:
-    pass
+except Exception as e:
+    st.warning(f"SVR failed: {e}")
 
-# ARIMA
+# ARIMA (Improved)
 try:
-    ts = train.set_index("Date")["Demand"].asfreq("MS")
-    arima = ARIMA(ts, order=(1,1,1)).fit()
-    forecast = arima.forecast(steps=len(val))
-    rmse_scores["ARIMA"] = np.sqrt(mean_squared_error(y_val, forecast))
+    ts_full = item_df.set_index("Date")["Demand"].asfreq("MS")
+    arima = ARIMA(ts_full, order=(1,1,1)).fit()
+    forecast_arima = arima.forecast(steps=len(val))
+    rmse_scores["ARIMA"] = np.sqrt(mean_squared_error(y_val, forecast_arima))
     models["ARIMA"] = arima
-except:
-    pass
+except Exception as e:
+    st.warning(f"ARIMA failed: {e}")
 
 best_model = min(rmse_scores, key=rmse_scores.get)
 st.success(f"🏆 Best Model: {best_model}")
 
 # ==============================
-# FORECAST
+# FORECAST (IMPROVED)
 # ==============================
 forecast_horizon = 6
-future_dates = pd.date_range(item_df["Date"].max() + pd.DateOffset(months=1), periods=forecast_horizon, freq="MS")
+future_dates = pd.date_range(item_df["Date"].max() + pd.DateOffset(months=1),
+                             periods=forecast_horizon, freq="MS")
 
 forecast_values = []
 temp_df = item_df.copy()
@@ -237,13 +230,16 @@ for i in range(forecast_horizon):
 
     last = temp_df.iloc[-1]
 
-    X_new = np.array([[
-        last["Demand"],
-        temp_df.iloc[-2]["Demand"],
-        temp_df.iloc[-3]["Demand"],
-        temp_df["Demand"].iloc[-3:].mean(),
-        last["Price"]
-    ]])
+    X_new = pd.DataFrame([{
+        "Lag1": last["Demand"],
+        "Lag2": temp_df.iloc[-2]["Demand"],
+        "Lag3": temp_df.iloc[-3]["Demand"],
+        "RollingMean3": temp_df["Demand"].iloc[-3:].mean(),
+        "Price": last["Price"],
+        "Month": future_dates[i].month,
+        "Year": future_dates[i].year,
+        "Trend": last["Trend"] + 1
+    }])
 
     if best_model == "SVR":
         model, scaler = models["SVR"]
@@ -261,9 +257,13 @@ for i in range(forecast_horizon):
 
     new_row = last.copy()
     new_row["Demand"] = pred
+    new_row["Trend"] += 1
     temp_df = pd.concat([temp_df, pd.DataFrame([new_row])])
 
-forecast_df = pd.DataFrame({"Date": future_dates, "Forecast": forecast_values})
+forecast_df = pd.DataFrame({
+    "Date": future_dates,
+    "Forecast": forecast_values
+})
 
 # ==============================
 # KPI
@@ -292,27 +292,15 @@ st.plotly_chart(fig, use_container_width=True)
 # MODEL COMPARISON
 # ==============================
 rows = []
-
 for m, r in rmse_scores.items():
-    safety = Z * r * np.sqrt(LT)
-    rop_val = avg_fc * LT + safety
-
-    rows.append({
-        "Model": m,
-        "RMSE": round(r,2),
-        "Safety Stock": round(safety,2),
-        "ROP": round(rop_val,2)
-    })
+    rows.append({"Model": m, "RMSE": round(r,2)})
 
 rmse_df = pd.DataFrame(rows).sort_values("RMSE")
 
-def highlight(row):
-    return ['background-color: lightgreen' if row["Model"] == best_model else '' for _ in row]
-
 st.subheader("📊 Model Comparison")
-st.dataframe(rmse_df.style.apply(highlight, axis=1))
+st.dataframe(rmse_df)
 
 # ==============================
 # DOWNLOAD
 # ==============================
-st.download_button("📥 Download Forecast", forecast_df.to_csv(index=False), "forecast.csv")
+st.download_button("Download Forecast", forecast_df.to_csv(index=False), "forecast.csv")

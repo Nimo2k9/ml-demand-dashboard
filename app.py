@@ -48,22 +48,17 @@ df_long = df.melt(
     value_name="Demand"
 )
 
-# ✅ FIX DATE ERROR
 df_long["Date"] = pd.to_datetime(df_long["Date"], errors="coerce")
 df_long = df_long.dropna(subset=["Date"])
 
-# ==============================
-# CLEAN NUMERIC (CRITICAL FIX)
-# ==============================
 df_long["Demand"] = pd.to_numeric(df_long["Demand"], errors="coerce")
 df_long["Price"] = pd.to_numeric(df_long["Price"], errors="coerce")
 
 df_long = df_long.dropna(subset=["Demand", "Price"])
-
 df_long = df_long.sort_values(["Item Code", "Date"])
 
 # ==============================
-# FEATURE ENGINEERING
+# FEATURES
 # ==============================
 df_long["Lag1"] = df_long.groupby("Item Code")["Demand"].shift(1)
 df_long["Lag2"] = df_long.groupby("Item Code")["Demand"].shift(2)
@@ -78,7 +73,6 @@ df_long["RollingMean3"] = (
 
 features = ["Lag1", "Lag2", "Lag3", "RollingMean3", "Price"]
 
-# ✅ FORCE NUMERIC AGAIN (BULLETPROOF)
 for col in features:
     df_long[col] = pd.to_numeric(df_long[col], errors='coerce')
 
@@ -90,7 +84,12 @@ df_long = df_long.dropna(subset=features + ["Demand"])
 st.title("📊 ML Demand Forecasting Dashboard")
 
 item_list = df_long["Item Code"].unique()
-selected_item = st.selectbox("Select Item", item_list)
+item_map = df_long[["Item Code","Item Name"]].drop_duplicates()
+
+selected_item = st.selectbox("Select Item Code", item_list)
+
+item_name = item_map[item_map["Item Code"] == selected_item]["Item Name"].values[0]
+st.markdown(f"**Item Description:** {item_name}")
 
 item_df = df_long[df_long["Item Code"] == selected_item].copy()
 
@@ -112,7 +111,7 @@ models = {}
 rmse_scores = {}
 
 # ==============================
-# RANDOM FOREST
+# MODELS
 # ==============================
 try:
     rf = RandomForestRegressor(n_estimators=200, max_depth=10, random_state=42)
@@ -123,9 +122,6 @@ try:
 except:
     pass
 
-# ==============================
-# XGBOOST
-# ==============================
 try:
     xgb = XGBRegressor(n_estimators=200, learning_rate=0.05, max_depth=5)
     xgb.fit(X_train, y_train)
@@ -135,9 +131,6 @@ try:
 except:
     pass
 
-# ==============================
-# SVR
-# ==============================
 try:
     scaler = StandardScaler()
     X_train_s = scaler.fit_transform(X_train)
@@ -151,9 +144,6 @@ try:
 except:
     pass
 
-# ==============================
-# ARIMA
-# ==============================
 try:
     ts = train.set_index("Date")["Demand"].asfreq("MS")
     arima = ARIMA(ts, order=(1,1,1)).fit()
@@ -163,11 +153,8 @@ try:
 except:
     pass
 
-# ==============================
-# BEST MODEL
-# ==============================
 if len(rmse_scores) == 0:
-    st.error("No model could be trained. Check your data.")
+    st.error("No model could be trained.")
     st.stop()
 
 best_model_name = min(rmse_scores, key=rmse_scores.get)
@@ -177,7 +164,6 @@ st.success(f"🏆 Best Model: {best_model_name}")
 # FORECAST
 # ==============================
 forecast_horizon = 6
-
 future_dates = pd.date_range(
     start=item_df["Date"].max() + pd.DateOffset(months=1),
     periods=forecast_horizon,
@@ -191,13 +177,13 @@ for i in range(forecast_horizon):
 
     last = temp_df.iloc[-1]
 
-    lag1 = last["Demand"]
-    lag2 = temp_df.iloc[-2]["Demand"]
-    lag3 = temp_df.iloc[-3]["Demand"]
-    rolling = temp_df["Demand"].iloc[-3:].mean()
-    price = last["Price"]
-
-    X_new = np.array([[lag1, lag2, lag3, rolling, price]])
+    X_new = np.array([[
+        last["Demand"],
+        temp_df.iloc[-2]["Demand"],
+        temp_df.iloc[-3]["Demand"],
+        temp_df["Demand"].iloc[-3:].mean(),
+        last["Price"]
+    ]])
 
     if best_model_name == "SVR":
         model, scaler = models["SVR"]
@@ -209,8 +195,7 @@ for i in range(forecast_horizon):
         break
 
     else:
-        model = models[best_model_name]
-        pred = model.predict(X_new)[0]
+        pred = models[best_model_name].predict(X_new)[0]
 
     forecast_values.append(pred)
 
@@ -224,7 +209,7 @@ forecast_df = pd.DataFrame({
 })
 
 # ==============================
-# KPIs
+# KPI
 # ==============================
 rmse = rmse_scores[best_model_name]
 LT = 1.2
@@ -235,41 +220,48 @@ avg_forecast = forecast_df["Forecast"].mean()
 rop = avg_forecast * LT + safety_stock
 
 col1, col2, col3 = st.columns(3)
-col1.metric("RMSE", round(rmse, 2))
-col2.metric("Safety Stock", round(safety_stock, 2))
-col3.metric("Reorder Point", round(rop, 2))
+col1.metric("RMSE", round(rmse,2))
+col2.metric("Safety Stock", round(safety_stock,2))
+col3.metric("ROP", round(rop,2))
 
 # ==============================
 # PLOT
 # ==============================
 fig = go.Figure()
-
-fig.add_trace(go.Scatter(
-    x=item_df["Date"], y=item_df["Demand"],
-    mode='lines', name='Historical'
-))
-
-fig.add_trace(go.Scatter(
-    x=forecast_df["Date"], y=forecast_df["Forecast"],
-    mode='lines', name='Forecast'
-))
-
+fig.add_trace(go.Scatter(x=item_df["Date"], y=item_df["Demand"], name="Historical"))
+fig.add_trace(go.Scatter(x=forecast_df["Date"], y=forecast_df["Forecast"], name="Forecast"))
 st.plotly_chart(fig, use_container_width=True)
 
 # ==============================
-# MODEL COMPARISON
+# MODEL COMPARISON (WITH HIGHLIGHT)
 # ==============================
-rmse_df = pd.DataFrame(list(rmse_scores.items()), columns=["Model", "RMSE"])
+rows = []
+
+for m, r in rmse_scores.items():
+    safety = Z * r * np.sqrt(LT)
+    rop_val = avg_forecast * LT + safety
+
+    rows.append({
+        "Model": m,
+        "RMSE": round(r,2),
+        "Safety Stock": round(safety,2),
+        "ROP": round(rop_val,2)
+    })
+
+rmse_df = pd.DataFrame(rows)
+
+# Highlight best row
+def highlight_best(row):
+    if row["Model"] == best_model_name:
+        return ['background-color: lightgreen']*len(row)
+    else:
+        return ['']*len(row)
+
 st.subheader("📊 Model Comparison")
-st.dataframe(rmse_df)
+st.dataframe(rmse_df.style.apply(highlight_best, axis=1))
 
 # ==============================
 # DOWNLOAD
 # ==============================
 csv = forecast_df.to_csv(index=False).encode('utf-8')
-st.download_button(
-    "📥 Download Forecast",
-    csv,
-    "forecast.csv",
-    "text/csv"
-)
+st.download_button("📥 Download Forecast", csv, "forecast.csv")

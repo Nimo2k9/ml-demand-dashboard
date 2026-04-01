@@ -1,8 +1,46 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import hashlib
 
-# ML Models
+# ==============================
+# LOGIN SYSTEM
+# ==============================
+USER_CREDENTIALS = {
+    "admin": "1234",
+    "niaz": "ml2025"
+}
+
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+USER_CREDENTIALS = {u: hash_password(p) for u, p in USER_CREDENTIALS.items()}
+
+def login():
+    st.title("🔐 Login Required")
+
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Login"):
+        if username in USER_CREDENTIALS and USER_CREDENTIALS[username] == hash_password(password):
+            st.session_state["logged_in"] = True
+            st.session_state["user"] = username
+            st.success("Login successful!")
+            st.rerun()
+        else:
+            st.error("Invalid username or password")
+
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+
+if not st.session_state["logged_in"]:
+    login()
+    st.stop()
+
+# ==============================
+# IMPORT ML LIBRARIES
+# ==============================
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, ExtraTreesRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVR
@@ -16,6 +54,20 @@ from statsmodels.tsa.arima.model import ARIMA
 import plotly.graph_objects as go
 
 st.set_page_config(page_title="Advanced Demand Forecast Dashboard", layout="wide")
+
+# ==============================
+# HEADER
+# ==============================
+col1, col2 = st.columns([8,2])
+
+with col1:
+    st.title("📊 Advanced ML Demand Forecast Dashboard")
+    st.markdown(f"👤 Logged in as: **{st.session_state['user']}**")
+
+with col2:
+    if st.button("Logout"):
+        st.session_state["logged_in"] = False
+        st.rerun()
 
 # ==============================
 # LOAD DATA
@@ -58,7 +110,7 @@ df_long = df_long.dropna()
 df_long = df_long.sort_values(["Item Code","Date"])
 
 # ==============================
-# FEATURE ENGINEERING
+# FEATURES
 # ==============================
 df_long["Lag1"] = df_long.groupby("Item Code")["Demand"].shift(1)
 df_long["Lag2"] = df_long.groupby("Item Code")["Demand"].shift(2)
@@ -79,10 +131,8 @@ for col in features:
 df_long = df_long.dropna()
 
 # ==============================
-# UI
+# UI - ITEM SELECT
 # ==============================
-st.title("📊 Advanced ML Demand Forecast Dashboard")
-
 item_list = df_long["Item Code"].unique()
 item_map = df_long[["Item Code","Item Name"]].drop_duplicates()
 
@@ -110,24 +160,22 @@ y_val = val["Demand"]
 models = {}
 rmse_scores = {}
 
-# ==============================
-# MODELS
-# ==============================
-def train_model(name, model, Xtr, ytr, Xv, yv):
+def train_model(name, model):
     try:
-        model.fit(Xtr, ytr)
-        pred = model.predict(Xv)
-        rmse_scores[name] = np.sqrt(mean_squared_error(yv, pred))
+        model.fit(X_train, y_train)
+        pred = model.predict(X_val)
+        rmse_scores[name] = np.sqrt(mean_squared_error(y_val, pred))
         models[name] = model
     except:
         pass
 
-train_model("RF", RandomForestRegressor(n_estimators=200), X_train, y_train, X_val, y_val)
-train_model("XGB", XGBRegressor(n_estimators=200), X_train, y_train, X_val, y_val)
-train_model("GB", GradientBoostingRegressor(), X_train, y_train, X_val, y_val)
-train_model("ET", ExtraTreesRegressor(n_estimators=200), X_train, y_train, X_val, y_val)
-train_model("KNN", KNeighborsRegressor(), X_train, y_train, X_val, y_val)
-train_model("LR", LinearRegression(), X_train, y_train, X_val, y_val)
+# Train models
+train_model("RF", RandomForestRegressor())
+train_model("XGB", XGBRegressor())
+train_model("GB", GradientBoostingRegressor())
+train_model("ET", ExtraTreesRegressor())
+train_model("KNN", KNeighborsRegressor())
+train_model("LR", LinearRegression())
 
 # SVR
 try:
@@ -138,6 +186,7 @@ try:
     svr = SVR()
     svr.fit(X_train_s, y_train)
     pred = svr.predict(X_val_s)
+
     rmse_scores["SVR"] = np.sqrt(mean_squared_error(y_val, pred))
     models["SVR"] = (svr, scaler)
 except:
@@ -148,14 +197,12 @@ try:
     ts = train.set_index("Date")["Demand"].asfreq("MS")
     arima = ARIMA(ts, order=(1,1,1)).fit()
     forecast = arima.forecast(steps=len(val))
+
     rmse_scores["ARIMA"] = np.sqrt(mean_squared_error(y_val, forecast))
     models["ARIMA"] = arima
 except:
     pass
 
-# ==============================
-# BEST MODEL
-# ==============================
 best_model = min(rmse_scores, key=rmse_scores.get)
 st.success(f"🏆 Best Model: {best_model}")
 

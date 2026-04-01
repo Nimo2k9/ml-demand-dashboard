@@ -34,11 +34,11 @@ df = load_data(uploaded_file)
 # ==============================
 # PREPROCESS
 # ==============================
-static_cols = ["Item Code","Item Name","Price"]
+static_cols = ["Item Code", "Item Name", "Price"]
 
 month_cols = [
     c for c in df.columns
-    if c not in static_cols and c not in ["LCM","Total"]
+    if c not in static_cols and c not in ["LCM", "Total"]
 ]
 
 df_long = df.melt(
@@ -48,14 +48,22 @@ df_long = df.melt(
     value_name="Demand"
 )
 
+# ✅ FIX DATE ERROR
 df_long["Date"] = pd.to_datetime(df_long["Date"], errors="coerce")
 df_long = df_long.dropna(subset=["Date"])
 
-df_long["Demand"] = df_long["Demand"].fillna(0)
-df_long = df_long.sort_values(["Item Code","Date"])
+# ==============================
+# CLEAN NUMERIC (CRITICAL FIX)
+# ==============================
+df_long["Demand"] = pd.to_numeric(df_long["Demand"], errors="coerce")
+df_long["Price"] = pd.to_numeric(df_long["Price"], errors="coerce")
+
+df_long = df_long.dropna(subset=["Demand", "Price"])
+
+df_long = df_long.sort_values(["Item Code", "Date"])
 
 # ==============================
-# FEATURES
+# FEATURE ENGINEERING
 # ==============================
 df_long["Lag1"] = df_long.groupby("Item Code")["Demand"].shift(1)
 df_long["Lag2"] = df_long.groupby("Item Code")["Demand"].shift(2)
@@ -68,9 +76,13 @@ df_long["RollingMean3"] = (
     .mean()
 )
 
-df_long = df_long.dropna()
+features = ["Lag1", "Lag2", "Lag3", "RollingMean3", "Price"]
 
-features = ["Lag1","Lag2","Lag3","RollingMean3","Price"]
+# ✅ FORCE NUMERIC AGAIN (BULLETPROOF)
+for col in features:
+    df_long[col] = pd.to_numeric(df_long[col], errors='coerce')
+
+df_long = df_long.dropna(subset=features + ["Demand"])
 
 # ==============================
 # UI
@@ -85,46 +97,63 @@ item_df = df_long[df_long["Item Code"] == selected_item].copy()
 # ==============================
 # TRAIN / VALID SPLIT
 # ==============================
-split = int(len(item_df)*0.8)
+split = int(len(item_df) * 0.8)
 
 train = item_df.iloc[:split]
 val = item_df.iloc[split:]
 
-X_train = train[features]
+X_train = train[features].astype(float)
 y_train = train["Demand"]
 
-X_val = val[features]
+X_val = val[features].astype(float)
 y_val = val["Demand"]
 
 models = {}
 rmse_scores = {}
 
-# RF
-rf = RandomForestRegressor(n_estimators=200, max_depth=10, random_state=42)
-rf.fit(X_train, y_train)
-pred = rf.predict(X_val)
-rmse_scores["RF"] = np.sqrt(mean_squared_error(y_val, pred))
-models["RF"] = rf
+# ==============================
+# RANDOM FOREST
+# ==============================
+try:
+    rf = RandomForestRegressor(n_estimators=200, max_depth=10, random_state=42)
+    rf.fit(X_train, y_train)
+    pred = rf.predict(X_val)
+    rmse_scores["RF"] = np.sqrt(mean_squared_error(y_val, pred))
+    models["RF"] = rf
+except:
+    pass
 
-# XGB
-xgb = XGBRegressor(n_estimators=200, learning_rate=0.05, max_depth=5)
-xgb.fit(X_train, y_train)
-pred = xgb.predict(X_val)
-rmse_scores["XGB"] = np.sqrt(mean_squared_error(y_val, pred))
-models["XGB"] = xgb
+# ==============================
+# XGBOOST
+# ==============================
+try:
+    xgb = XGBRegressor(n_estimators=200, learning_rate=0.05, max_depth=5)
+    xgb.fit(X_train, y_train)
+    pred = xgb.predict(X_val)
+    rmse_scores["XGB"] = np.sqrt(mean_squared_error(y_val, pred))
+    models["XGB"] = xgb
+except:
+    pass
 
+# ==============================
 # SVR
-scaler = StandardScaler()
-X_train_s = scaler.fit_transform(X_train)
-X_val_s = scaler.transform(X_val)
+# ==============================
+try:
+    scaler = StandardScaler()
+    X_train_s = scaler.fit_transform(X_train)
+    X_val_s = scaler.transform(X_val)
 
-svr = SVR(C=100, gamma=0.1)
-svr.fit(X_train_s, y_train)
-pred = svr.predict(X_val_s)
-rmse_scores["SVR"] = np.sqrt(mean_squared_error(y_val, pred))
-models["SVR"] = (svr, scaler)
+    svr = SVR(C=100, gamma=0.1)
+    svr.fit(X_train_s, y_train)
+    pred = svr.predict(X_val_s)
+    rmse_scores["SVR"] = np.sqrt(mean_squared_error(y_val, pred))
+    models["SVR"] = (svr, scaler)
+except:
+    pass
 
+# ==============================
 # ARIMA
+# ==============================
 try:
     ts = train.set_index("Date")["Demand"].asfreq("MS")
     arima = ARIMA(ts, order=(1,1,1)).fit()
@@ -137,14 +166,18 @@ except:
 # ==============================
 # BEST MODEL
 # ==============================
-best_model_name = min(rmse_scores, key=rmse_scores.get)
+if len(rmse_scores) == 0:
+    st.error("No model could be trained. Check your data.")
+    st.stop()
 
+best_model_name = min(rmse_scores, key=rmse_scores.get)
 st.success(f"🏆 Best Model: {best_model_name}")
 
 # ==============================
-# FORECAST 6 MONTHS
+# FORECAST
 # ==============================
 forecast_horizon = 6
+
 future_dates = pd.date_range(
     start=item_df["Date"].max() + pd.DateOffset(months=1),
     periods=forecast_horizon,
@@ -191,7 +224,7 @@ forecast_df = pd.DataFrame({
 })
 
 # ==============================
-# KPI CALCULATION
+# KPIs
 # ==============================
 rmse = rmse_scores[best_model_name]
 LT = 1.2
@@ -201,17 +234,13 @@ safety_stock = Z * rmse * np.sqrt(LT)
 avg_forecast = forecast_df["Forecast"].mean()
 rop = avg_forecast * LT + safety_stock
 
-# ==============================
-# DISPLAY KPIs
-# ==============================
 col1, col2, col3 = st.columns(3)
-
-col1.metric("RMSE", round(rmse,2))
-col2.metric("Safety Stock", round(safety_stock,2))
-col3.metric("Reorder Point", round(rop,2))
+col1.metric("RMSE", round(rmse, 2))
+col2.metric("Safety Stock", round(safety_stock, 2))
+col3.metric("Reorder Point", round(rop, 2))
 
 # ==============================
-# PLOT (INTERACTIVE)
+# PLOT
 # ==============================
 fig = go.Figure()
 
@@ -228,9 +257,9 @@ fig.add_trace(go.Scatter(
 st.plotly_chart(fig, use_container_width=True)
 
 # ==============================
-# RMSE COMPARISON
+# MODEL COMPARISON
 # ==============================
-rmse_df = pd.DataFrame(list(rmse_scores.items()), columns=["Model","RMSE"])
+rmse_df = pd.DataFrame(list(rmse_scores.items()), columns=["Model", "RMSE"])
 st.subheader("📊 Model Comparison")
 st.dataframe(rmse_df)
 

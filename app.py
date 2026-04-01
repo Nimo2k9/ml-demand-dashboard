@@ -8,7 +8,6 @@ import numpy as np
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, ExtraTreesRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVR
-from sklearn.neighbors import KNeighborsRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 
@@ -91,7 +90,7 @@ df["Price"] = pd.to_numeric(df["Price"], errors="coerce")
 df = df.dropna().sort_values(["Item Code","Date"])
 
 # ==============================
-# FEATURES
+# FEATURE ENGINEERING (FIXED)
 # ==============================
 df["Lag1"] = df.groupby("Item Code")["Demand"].shift(1)
 df["Lag2"] = df.groupby("Item Code")["Demand"].shift(2)
@@ -100,10 +99,19 @@ df["Lag3"] = df.groupby("Item Code")["Demand"].shift(3)
 df["RollingMean3"] = df.groupby("Item Code")["Demand"].shift(1).rolling(3).mean()
 
 df["Month"] = df["Date"].dt.month
-df["Year"] = df["Date"].dt.year
 df["Trend"] = df.groupby("Item Code").cumcount()
 
-features = ["Lag1","Lag2","Lag3","RollingMean3","Price","Month","Year","Trend"]
+# ✅ Seasonality Fix
+df["Month_sin"] = np.sin(2 * np.pi * df["Month"] / 12)
+df["Month_cos"] = np.cos(2 * np.pi * df["Month"] / 12)
+
+features = [
+    "Lag1","Lag2","Lag3",
+    "RollingMean3",
+    "Price",
+    "Month_sin","Month_cos",
+    "Trend"
+]
 
 df = df.dropna()
 
@@ -124,7 +132,7 @@ if len(item_df) < 12:
     st.stop()
 
 # ==============================
-# TRAIN
+# TRAIN / VALIDATION SPLIT
 # ==============================
 split = int(len(item_df)*0.8)
 
@@ -148,10 +156,11 @@ def train_model(name, model):
     except:
         pass
 
-train_model("RF", RandomForestRegressor())
-train_model("XGB", XGBRegressor())
-train_model("GB", GradientBoostingRegressor())
-train_model("ET", ExtraTreesRegressor())
+# ✅ Improved Models
+train_model("RF", RandomForestRegressor(n_estimators=200, max_depth=10, random_state=42))
+train_model("XGB", XGBRegressor(n_estimators=200, learning_rate=0.05, max_depth=5))
+train_model("GB", GradientBoostingRegressor(n_estimators=200, learning_rate=0.05))
+train_model("ET", ExtraTreesRegressor(n_estimators=200, random_state=42))
 train_model("LR", LinearRegression())
 
 # SVR
@@ -164,12 +173,20 @@ svr.fit(X_train_s, y_train)
 rmse_scores["SVR"] = np.sqrt(mean_squared_error(y_val, svr.predict(X_val_s)))
 models["SVR"] = (svr, scaler)
 
-# ARIMA
-ts = item_df.set_index("Date")["Demand"].asfreq("MS")
-arima = ARIMA(ts, order=(1,1,1)).fit()
-rmse_scores["ARIMA"] = np.sqrt(mean_squared_error(y_val, arima.forecast(len(val))))
-models["ARIMA"] = arima
+# ✅ ARIMA FIX (NO LEAKAGE)
+ts_train = train.set_index("Date")["Demand"].asfreq("MS")
 
+try:
+    arima = ARIMA(ts_train, order=(1,1,1)).fit()
+    arima_pred = arima.forecast(len(val))
+    rmse_scores["ARIMA"] = np.sqrt(mean_squared_error(y_val, arima_pred))
+    models["ARIMA"] = arima
+except:
+    pass
+
+# ==============================
+# BEST MODEL
+# ==============================
 best_model = min(rmse_scores, key=rmse_scores.get)
 st.success(f"🏆 Best Model: {best_model}")
 
@@ -190,19 +207,25 @@ for i in range(6):
         "Lag3": temp.iloc[-3]["Demand"],
         "RollingMean3": temp["Demand"].iloc[-3:].mean(),
         "Price": last["Price"],
-        "Month": future_dates[i].month,
-        "Year": future_dates[i].year,
+        "Month_sin": np.sin(2*np.pi*future_dates[i].month/12),
+        "Month_cos": np.cos(2*np.pi*future_dates[i].month/12),
         "Trend": last["Trend"] + 1
     }])
 
     if best_model == "SVR":
         model, sc = models["SVR"]
         pred = model.predict(sc.transform(X_new))[0]
+
     elif best_model == "ARIMA":
         forecast = models["ARIMA"].forecast(6)
+        forecast = np.maximum(0, forecast)
         break
+
     else:
         pred = models[best_model].predict(X_new)[0]
+
+    # ✅ Prevent negative forecast
+    pred = max(0, pred)
 
     forecast.append(pred)
 
@@ -214,7 +237,7 @@ for i in range(6):
 forecast_df = pd.DataFrame({"Date": future_dates, "Forecast": forecast})
 
 # ==============================
-# KPI (RESTORED)
+# KPI
 # ==============================
 rmse = rmse_scores[best_model]
 safety_stock = Z * rmse * np.sqrt(LT)
@@ -227,28 +250,61 @@ col2.metric("Safety Stock", round(safety_stock,2))
 col3.metric("ROP", round(rop,2))
 
 # ==============================
-# PLOT
+# DEMAND INSIGHT
+# ==============================
+st.subheader("📈 Demand Insight")
+
+trend = "Increasing 📈" if item_df["Demand"].iloc[-1] > item_df["Demand"].iloc[0] else "Stable/Decreasing 📉"
+
+st.write(f"Trend: {trend}")
+st.write(f"Average Demand: {round(item_df['Demand'].mean(),2)}")
+st.write(f"Volatility: {round(item_df['Demand'].std(),2)}")
+
+# ==============================
+# PLOT (WITH LABELS)
 # ==============================
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=item_df["Date"], y=item_df["Demand"], name="Actual"))
-fig.add_trace(go.Scatter(x=forecast_df["Date"], y=forecast_df["Forecast"], name="Forecast"))
+
+fig.add_trace(go.Scatter(
+    x=item_df["Date"], y=item_df["Demand"],
+    name="Actual"
+))
+
+fig.add_trace(go.Scatter(
+    x=forecast_df["Date"],
+    y=forecast_df["Forecast"],
+    name="Forecast",
+    mode="lines+markers+text",
+    text=np.round(forecast_df["Forecast"],2),
+    textposition="top center"
+))
+
 st.plotly_chart(fig, use_container_width=True)
 
 # ==============================
-# RMSE CHART (WITH LABELS 🔥)
+# RMSE CHART (HIGHLIGHT BEST)
 # ==============================
 rmse_df = pd.DataFrame(list(rmse_scores.items()), columns=["Model","RMSE"]).sort_values("RMSE")
+
+rmse_df["Color"] = np.where(rmse_df["Model"] == best_model, "Best", "Other")
 
 fig2 = px.bar(
     rmse_df,
     x="Model",
     y="RMSE",
     text="RMSE",
+    color="Color",
     title="Model Comparison"
 )
 
 fig2.update_traces(textposition="outside")
 st.plotly_chart(fig2, use_container_width=True)
+
+# ==============================
+# MODEL TABLE
+# ==============================
+st.subheader("📊 Model Performance Table")
+st.dataframe(rmse_df)
 
 # ==============================
 # FEATURE IMPORTANCE

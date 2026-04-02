@@ -306,15 +306,7 @@ st.plotly_chart(fig2, use_container_width=True)
 st.subheader("📊 Model Performance Table")
 st.dataframe(rmse_df)
 
-# ==============================
-# FEATURE IMPORTANCE
-# ==============================
-if best_model in ["RF","XGB","GB","ET"]:
-    imp = models[best_model].feature_importances_
-    imp_df = pd.DataFrame({"Feature":features,"Importance":imp}).sort_values("Importance", ascending=False)
 
-    fig3 = px.bar(imp_df, x="Feature", y="Importance", title="Feature Importance")
-    st.plotly_chart(fig3, use_container_width=True)
 
 # ==============================
 # DOWNLOAD

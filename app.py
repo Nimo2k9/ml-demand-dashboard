@@ -17,7 +17,7 @@ from statsmodels.tsa.arima.model import ARIMA
 import plotly.graph_objects as go
 import plotly.express as px
 
-st.set_page_config(page_title="AI Demand Forecast Dashboard", layout="wide")
+st.set_page_config(page_title="ML based Demand Forecast Dashboard", layout="wide")
 
 # ==============================
 # HEADER

@@ -22,7 +22,7 @@ st.set_page_config(page_title="ML based Demand Forecast Dashboard", layout="wide
 # ==============================
 # HEADER
 # ==============================
-st.title("🚀 AI Demand Forecast Dashboard")
+st.title("🚀 ML based Demand Forecast Dashboard")
 
 # ==============================
 # SIDEBAR SETTINGS
